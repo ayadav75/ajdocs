@@ -25,7 +25,9 @@ Browser (React + TipTap) ──fetch──▶ Express (/api) ──SQL──▶ 
   - History snapshots the previous content at most every 10 minutes, so autosave doesn't flood it.
   - Export is Turndown for Markdown plus the browser's print-to-PDF, so the server does no PDF rendering.
   - The brief asked for one stretch feature. All five were added on request, each in the smallest working form, with tests.
-- **Import creates a new doc** instead of attaching a file. It's the most useful behavior for an editor, and it needs no file storage.
+- **Import converts files to HTML on the server.** From the home page a file becomes a new doc; inside a doc, the same converter returns HTML that the editor inserts at the cursor and autosaves. One converter, two entry points.
+- **Images live in Postgres (`images.data BYTEA`), not on disk or a bucket.** Render's free disk is wiped on every deploy, and a bucket would be a second service to configure. The doc stores a URL like `/api/documents/7/images/3`, so serving goes through `getDoc()` and gets the same access control as the doc. The type is read from the file's magic bytes (PNG, JPEG, GIF, WebP only; no SVG, which can carry script) and served with `nosniff`.
+- **Image cleanup respects undo and history.** On each content save or restore, images no longer referenced by the doc *or any saved version* are marked, then deleted a day later. Deleting immediately would break Ctrl+Z after autosave and restoring older versions.
 - **Hash routing, plain CSS, no state library.** The app has three screens; a router, UI kit, or store would be dead weight.
 
 ## Deliberate cuts
@@ -36,8 +38,9 @@ Browser (React + TipTap) ──fetch──▶ Express (/api) ──SQL──▶ 
 | Suggestion mode, anchored comments | Each needs custom editor marks and resolve flows. Document-level comments with quotes cover the review use case for now. |
 | Multi-instance presence | Presence lives in server memory (marked `shortcut:` in code). Fine for one Render instance. |
 | Real auth | Not what's being evaluated. Would add email magic links. |
+| Image storage at scale | Fine for a demo; at volume, move image bytes to object storage (S3/R2) and keep the same access-checked URL. |
 | PDF import | Converting PDF to formatted HTML is unreliable. Out of scope, and the UI says so. |
 
 ## Testing
 
-`server/app.test.js` (Vitest + Supertest, in-memory PGlite) covers: private by default → shared → recipient can read and edit and sees it under "shared"; non-owners can't share or delete; unauthenticated requests are rejected; validation; Markdown import structure; text escaping; unsupported file types; viewers can read and comment but not edit or restore; version snapshot and restore; presence, including the "edited by someone else" flag and a 404 for outsiders. I verified the UI by hand in the browser (formatting persists after a reload, the owner/shared split, Bob's view of a shared doc).
+`server/app.test.js` (Vitest + Supertest, in-memory PGlite) covers: private by default → shared → recipient can read and edit and sees it under "shared"; non-owners can't share or delete; unauthenticated requests are rejected; validation; Markdown import structure; text escaping; unsupported file types; viewers can read and comment but not edit or restore; version snapshot and restore; presence, including the "edited by someone else" flag and a 404 for outsiders; inserting a file into an existing doc (and viewers being refused); image upload, access control and magic-byte checks (an SVG renamed to .png is rejected); and image cleanup (deleted after the grace period, kept while a saved version uses it). 12 tests in all. I verified the UI by hand in the browser (formatting persists after a reload, the owner/shared split, Bob's view of a shared doc, inserting images, a GIF, a pasted image and a Markdown file into one doc and reloading).

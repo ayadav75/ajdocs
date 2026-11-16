@@ -18,7 +18,7 @@ No passwords. On the sign-in screen, pick a seeded user:
 
 ## Run locally
 
-Requires Node 20+. No database install: local runs use embedded Postgres (PGlite) stored in `./data`.
+Requires Node 22.9+. No database install: local runs use embedded Postgres (PGlite) stored in `./data`. If a `.env.local` with `DATABASE_URL` exists (for example from `neon init`), `npm run dev` and `npm start` use that database instead.
 
 ```bash
 npm install
@@ -48,7 +48,7 @@ Production-style run: `npm run build && npm start` → http://localhost:3000. Se
 
 **Working end to end:** everything listed above, locally and deployed.
 
-**Not built (deliberate cuts):** true real-time co-editing (concurrent edits are last-write-wins, with a "someone else changed this" banner), suggestion mode, comments anchored to a text range, real authentication, attachments. See [ARCHITECTURE.md](ARCHITECTURE.md) for the reasoning.
+**Not built (deliberate cuts):** true real-time co-editing (concurrent edits are last-write-wins, with a "someone else changed this" banner), suggestion mode, comments anchored to a text range, real authentication, non-image attachments (PDFs, video). See [ARCHITECTURE.md](ARCHITECTURE.md) for the reasoning.
 
 **Next 2–4 hours:**
 1. Optimistic concurrency: send `updated_at` with each save and reject stale writes, instead of only warning.
