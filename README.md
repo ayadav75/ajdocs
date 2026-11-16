@@ -2,7 +2,7 @@
 
 A lightweight collaborative document editor: create and edit rich-text documents, import files, and share documents with other users.
 
-**Live demo:** `TODO: Render URL` (on Render's free tier, the first request after idle takes ~30 s while the service wakes up)
+**Live demo:** https://ajaia-docs-ouow.onrender.com/ (on Render's free tier, the first request after idle takes ~30 s while the service wakes up)
 
 ## Demo accounts
 

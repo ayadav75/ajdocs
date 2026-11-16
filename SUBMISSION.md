@@ -6,7 +6,7 @@
 | Setup and run instructions | `README.md` |
 | Architecture note | `ARCHITECTURE.md` |
 | AI workflow note | `AI_WORKFLOW.md` |
-| Live product URL | `TODO: Render URL` (free tier: ~30 s cold start) |
+| Live product URL | https://ajaia-docs-ouow.onrender.com/ (free tier: ~30 s cold start) |
 | Walkthrough video URL | `VIDEO_URL.txt` |
 | Automated tests | `server/app.test.js` (`npm test`) |
 
