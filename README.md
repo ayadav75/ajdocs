@@ -33,6 +33,8 @@ Production-style run: `npm run build && npm start` → http://localhost:3000. Se
 - **Documents:** create, rename (edit the title inline), edit, delete (owner only). **Autosaves** 1 s after you stop typing and shows a Saving… / Saved / Not saved status with a Retry button. Pending edits are saved when you leave the doc, and the browser warns before you close a tab that has unsaved changes.
 - **Formatting:** bold, italic, underline, H1/H2, bulleted and numbered lists (toolbar or the usual keyboard shortcuts). Stored as HTML, so formatting survives a reload.
 - **File import:** **.txt, .md, .docx up to 2 MB**. Each file becomes a new editable document titled after the filename. Markdown and Word headings, lists, and bold/italic carry over. Other file types are rejected with a clear message.
+- **Insert into an open document:** the toolbar's file button inserts a .txt, .md or .docx file at the cursor instead of creating a new document.
+- **Images and GIFs:** PNG, JPEG, GIF (animated too) or WebP up to 5 MB, from the toolbar's image button or by pasting or dropping into the page. They are stored in Postgres and served only to people the document is shared with. The file's bytes decide its type, so SVG and renamed files are refused. An image removed from the text is deleted from the database a day later (so undo still works), unless a saved version still uses it.
 - **Sharing with roles:** every doc has one owner. The owner shares by email as **Can edit** or **Can view**, can change the role, and can revoke access. The doc list separates **My documents** from **Shared with me** (owner and role badge). Viewers get a read-only editor; only the owner can share or delete.
 
 ### Stretch features (the brief asked for one; all five are in, each kept small)

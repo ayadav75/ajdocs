@@ -76,8 +76,8 @@ input[type=email] { font: inherit; padding: 6px 12px; border: 1px solid var(--ru
 .title-input:hover { border-color: var(--rule); }
 
 .toolbar { position: sticky; top: 0; z-index: 1; display: flex; flex-wrap: wrap; gap: 2px; margin: 16px 0 0; padding: 4px; background: var(--paper); border-bottom: 1px solid var(--rule); border-radius: 4px 4px 0 0; box-shadow: var(--shadow); }
-.toolbar button { min-width: 32px; height: 32px; padding: 0 8px; justify-content: center; border-color: transparent; background: transparent; }
-.toolbar button:hover { border-color: var(--rule); }
+.toolbar button, .toolbar .button { min-width: 32px; height: 32px; padding: 0 8px; justify-content: center; border-color: transparent; background: transparent; }
+.toolbar button:hover, .toolbar .button:hover { border-color: var(--rule); }
 .toolbar button.on { background: var(--violet-tint); color: var(--violet); }
 .toolbar [aria-label=Bold] { font-weight: 700; }
 .toolbar [aria-label=Italic] { font-style: italic; font-family: var(--text); }
@@ -215,3 +215,6 @@ blockquote { margin: 0 0 8px; padding: 0 12px; border-left: 2px solid var(--viol
 
 /* One line-icon set (lucide paths), drawn in the text colour of its control. */
 .icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+
+.page img { display: block; max-width: 100%; height: auto; margin: 16px auto; border-radius: 2px; }
+.page img.ProseMirror-selectednode { outline: 2px solid var(--violet); outline-offset: 2px; }

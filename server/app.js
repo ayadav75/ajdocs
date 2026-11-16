@@ -10,6 +10,8 @@ import { query } from './db.js';
 
 const MAX_UPLOAD = 2 * 1024 * 1024;
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_UPLOAD } });
+const MAX_IMAGE = 5 * 1024 * 1024;
+const imageUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMAGE } });
 
 class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -31,6 +33,26 @@ const IMPORTERS = {
   '.md': (buf) => marked.parse(buf.toString('utf8')),
   '.docx': async (buf) => (await mammoth.convertToHtml({ buffer: buf })).value,
 };
+
+async function convertUpload(file) {
+  if (!file) fail(400, 'Choose a file to import');
+  const ext = path.extname(file.originalname).toLowerCase();
+  const convert = IMPORTERS[ext];
+  if (!convert) fail(400, 'Unsupported file type. Use .txt, .md or .docx');
+  let html;
+  try { html = await convert(file.buffer); } catch { fail(400, 'Could not read that file'); }
+  return { html, title: path.basename(file.originalname, ext).trim().slice(0, 200) };
+}
+
+// Trust the bytes, not the client's Content-Type. No SVG: it can carry script.
+function imageType(buf) {
+  const hex = buf.subarray(0, 4).toString('hex');
+  if (hex === '89504e47') return 'image/png';
+  if (hex.startsWith('ffd8ff')) return 'image/jpeg';
+  if (buf.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
+  if (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return 'image/webp';
+  return null;
+}
 
 export const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -107,13 +129,8 @@ app.post('/api/documents', async (req, res) => {
 });
 
 app.post('/api/documents/import', upload.single('file'), async (req, res) => {
-  if (!req.file) fail(400, 'Choose a file to import');
-  const ext = path.extname(req.file.originalname).toLowerCase();
-  const convert = IMPORTERS[ext];
-  if (!convert) fail(400, 'Unsupported file type. Use .txt, .md or .docx');
-  let html;
-  try { html = await convert(req.file.buffer); } catch { fail(400, 'Could not read that file'); }
-  const title = path.basename(req.file.originalname, ext).trim().slice(0, 200) || 'Imported document';
+  const { html, title: name } = await convertUpload(req.file);
+  const title = name || 'Imported document';
   const [doc] = await query(
     'INSERT INTO documents (owner_id, title, content_html) VALUES ($1, $2, $3) RETURNING *',
     [req.user.id, title, html]);
@@ -141,6 +158,23 @@ async function snapshot(doc, userId, force = false) {
     [doc.id, doc.title, doc.content_html, userId, force, VERSION_EVERY]);
 }
 
+const IMAGE_GRACE = '1 day';
+
+// Images no longer in the doc or any saved version are marked, then deleted after IMAGE_GRACE,
+// so undo (and an upload that hasn't autosaved yet) still finds them. Re-adding one clears the mark.
+async function sweepImages(docId) {
+  await query(
+    `UPDATE images i SET unreferenced_since = CASE WHEN used THEN NULL ELSE COALESCE(i.unreferenced_since, now()) END
+       FROM (SELECT id,
+                    EXISTS (SELECT 1 FROM documents d WHERE d.id = $1 AND strpos(d.content_html, '/images/' || x.id || '"') > 0)
+                 OR EXISTS (SELECT 1 FROM document_versions v WHERE v.document_id = $1 AND strpos(v.content_html, '/images/' || x.id || '"') > 0)
+                    AS used
+               FROM images x WHERE x.document_id = $1) r
+      WHERE i.id = r.id`, [docId]);
+  await query(
+    'DELETE FROM images WHERE document_id = $1 AND unreferenced_since < now() - $2::interval', [docId, IMAGE_GRACE]);
+}
+
 async function writeDoc(docId, userId, title, html) {
   const [updated] = await query(
     `UPDATE documents SET title = $3, content_html = $4, updated_at = now(), updated_by = $2
@@ -158,9 +192,40 @@ app.patch('/api/documents/:id', async (req, res) => {
   if (content_html !== undefined && (typeof content_html !== 'string' || content_html.length > 1_000_000)) {
     fail(400, 'Content must be text under 1 MB');
   }
-  if (content_html !== undefined && content_html !== doc.content_html) await snapshot(doc, req.user.id);
+  const contentChanged = content_html !== undefined && content_html !== doc.content_html;
+  if (contentChanged) await snapshot(doc, req.user.id);
   const { id, updated_at } = await writeDoc(doc.id, req.user.id, newTitle, content_html ?? doc.content_html);
+  if (contentChanged) await sweepImages(doc.id);
   res.json({ id, title: newTitle, updated_at });
+});
+
+// Convert a file for insertion into an existing doc; the editor inserts it at the cursor and autosaves.
+app.post('/api/documents/:id/import', upload.single('file'), async (req, res) => {
+  requireEditor(await getDoc(req));
+  res.json({ html: (await convertUpload(req.file)).html });
+});
+
+// --- Images: stored in Postgres because the host's disk is wiped on every deploy ---
+
+app.post('/api/documents/:id/images', imageUpload.single('file'), async (req, res) => {
+  const doc = await getDoc(req);
+  requireEditor(doc);
+  if (!req.file) fail(400, 'Choose an image');
+  const mime = imageType(req.file.buffer);
+  if (!mime) fail(400, 'Unsupported image. Use PNG, JPEG, GIF or WebP');
+  const [img] = await query(
+    'INSERT INTO images (document_id, mime, data, created_by) VALUES ($1, $2, $3, $4) RETURNING id',
+    [doc.id, mime, req.file.buffer, req.user.id]);
+  res.status(201).json({ url: `/api/documents/${doc.id}/images/${img.id}` });
+});
+
+app.get('/api/documents/:id/images/:imageId', async (req, res) => {
+  const doc = await getDoc(req);
+  const [img] = await query('SELECT mime, data FROM images WHERE id = $1 AND document_id = $2',
+    [toId(req.params.imageId), doc.id]);
+  if (!img) fail(404, 'Image not found');
+  res.set({ 'Content-Type': img.mime, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, max-age=31536000, immutable' });
+  res.send(Buffer.from(img.data));
 });
 
 // --- Version history ---
@@ -181,7 +246,9 @@ app.post('/api/documents/:id/versions/:versionId/restore', async (req, res) => {
     [toId(req.params.versionId), doc.id]);
   if (!version) fail(404, 'Version not found');
   await snapshot(doc, req.user.id, true); // so the restore itself can be undone
-  res.json(await writeDoc(doc.id, req.user.id, version.title, version.content_html));
+  const restored = await writeDoc(doc.id, req.user.id, version.title, version.content_html);
+  await sweepImages(doc.id);
+  res.json(restored);
 });
 
 // --- Comments (document-level; any role can comment) ---
@@ -277,7 +344,7 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 app.use((err, req, res, next) => {
   const status = err instanceof multer.MulterError ? 400 : err.status ?? 500;
   if (status >= 500) console.error(err);
-  const message = err.code === 'LIMIT_FILE_SIZE' ? 'File is larger than 2 MB'
+  const message = err.code === 'LIMIT_FILE_SIZE' ? (req.path.endsWith('/images') ? 'Image is larger than 5 MB' : 'File is larger than 2 MB')
     : status >= 500 ? 'Something went wrong' : err.message;
   res.status(status).json({ error: message });
 });

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, test } from 'vitest';
 import request from 'supertest';
-import { initDb } from './db.js';
+import { initDb, query } from './db.js';
 import { app } from './app.js';
 
 const ALICE = 1, BOB = 2, CAROL = 3; // seeded in schema.sql
@@ -77,6 +77,69 @@ describe('validation and import', () => {
     const { body: doc } = await alice.post('/api/documents/import')
       .attach('file', Buffer.from('<script>x</script>'), 'a.txt').expect(201);
     expect(doc.content_html).toBe('<p>&lt;script&gt;x&lt;/script&gt;</p>');
+  });
+});
+
+describe('inserting files and images into a document', () => {
+  const GIF = Buffer.from('R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==', 'base64'); // 1x1 gif
+
+  test('a file is converted for insertion; viewers cannot use it', async () => {
+    const alice = await signIn(ALICE), bob = await signIn(BOB);
+    const { body: doc } = await alice.post('/api/documents').send({}).expect(201);
+    const { body } = await alice.post(`/api/documents/${doc.id}/import`)
+      .attach('file', Buffer.from('# Hi'), 'a.md').expect(200);
+    expect(body.html).toContain('<h1>Hi</h1>');
+    await alice.post(`/api/documents/${doc.id}/shares`).send({ email: 'bob@ajaia.test', role: 'viewer' }).expect(201);
+    await bob.post(`/api/documents/${doc.id}/import`).attach('file', Buffer.from('x'), 'a.txt').expect(403);
+  });
+
+  test('images are stored, served only to people with access, and checked by content', async () => {
+    const alice = await signIn(ALICE), bob = await signIn(BOB), carol = await signIn(CAROL);
+    const { body: doc } = await alice.post('/api/documents').send({}).expect(201);
+    const { body: { url } } = await alice.post(`/api/documents/${doc.id}/images`)
+      .attach('file', GIF, 'cat.gif').expect(201);
+
+    const got = await alice.get(url).expect(200);
+    expect(got.headers['content-type']).toBe('image/gif');
+    expect(Buffer.compare(got.body, GIF)).toBe(0);
+    await carol.get(url).expect(404);
+
+    // An SVG named .png is still refused: the bytes decide.
+    const { body: err } = await alice.post(`/api/documents/${doc.id}/images`)
+      .attach('file', Buffer.from('<svg onload="alert(1)"/>'), 'evil.png').expect(400);
+    expect(err.error).toMatch(/Unsupported image/);
+
+    await alice.post(`/api/documents/${doc.id}/shares`).send({ email: 'bob@ajaia.test', role: 'viewer' }).expect(201);
+    await bob.get(url).expect(200);
+    await bob.post(`/api/documents/${doc.id}/images`).attach('file', GIF, 'x.gif').expect(403);
+  });
+
+  test('an image removed from the text is deleted after the grace period, unless a saved version uses it', async () => {
+    const alice = await signIn(ALICE);
+    const { body: doc } = await alice.post('/api/documents').send({}).expect(201);
+    const upload = async () => (await alice.post(`/api/documents/${doc.id}/images`).attach('file', GIF, 'a.gif').expect(201)).body.url;
+    const save = (html) => alice.patch(`/api/documents/${doc.id}`).send({ content_html: html }).expect(200);
+    const age = () => query("UPDATE images SET unreferenced_since = now() - interval '2 days' WHERE unreferenced_since IS NOT NULL");
+
+    // First edit snapshots the doc *before* the image, and later edits within 10 min don't snapshot again,
+    // so `gone` never lands in a version.
+    await save('<p>a</p>');
+    const gone = await upload();
+    await save(`<p>a</p><img src="${gone}">`);
+    await save('<p>b</p>');
+    await alice.get(gone).expect(200); // still there for undo
+    await age();
+    await save('<p>c</p>');
+    await alice.get(gone).expect(404);
+
+    // Removed from the text but kept in history: restoring that version must still show it.
+    const { body: doc2 } = await alice.post('/api/documents').send({}).expect(201);
+    const kept = (await alice.post(`/api/documents/${doc2.id}/images`).attach('file', GIF, 'b.gif').expect(201)).body.url;
+    await alice.patch(`/api/documents/${doc2.id}`).send({ content_html: `<img src="${kept}">` }).expect(200);
+    await alice.patch(`/api/documents/${doc2.id}`).send({ content_html: '<p>x</p>' }).expect(200); // snapshots the img version
+    await age();
+    await alice.patch(`/api/documents/${doc2.id}`).send({ content_html: '<p>y</p>' }).expect(200);
+    await alice.get(kept).expect(200);
   });
 });
 

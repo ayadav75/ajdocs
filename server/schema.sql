@@ -47,3 +47,13 @@ CREATE TABLE IF NOT EXISTS comments (
   quote TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS images (
+  id SERIAL PRIMARY KEY,
+  document_id INT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  mime TEXT NOT NULL,
+  data BYTEA NOT NULL,
+  created_by INT REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE images ADD COLUMN IF NOT EXISTS unreferenced_since TIMESTAMPTZ;

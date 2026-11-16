@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { EditorContent, useEditor, useEditorState } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit'; // v3 StarterKit includes Underline
+import Image from '@tiptap/extension-image';
+import { Selection } from '@tiptap/pm/state';
 import TurndownService from 'turndown';
 import { api } from './api.js';
 import { ago, full } from './time.js';
@@ -21,6 +23,8 @@ const TOOLS = [
 ];
 
 const PRESENCE_EVERY = 10_000;
+const IMAGE_TYPES = 'image/png,image/jpeg,image/gif,image/webp';
+const imageFiles = (files) => [...(files ?? [])].filter((f) => f.type.startsWith('image/'));
 
 function download(filename, text) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown' }));
@@ -54,6 +58,8 @@ export default function Editor({ id, me }) {
   const saving = useRef(Promise.resolve()); // chain saves so they reach the server in order
   const lastKnown = useRef(null); // updated_at of the version we last loaded or saved
   const titleRef = useRef();
+  const [inserting, setInserting] = useState(''); // what's uploading, for the toolbar label
+  const uploadImagesRef = useRef(); // editorProps are bound once; the ref reaches the current closure
 
   function flush() {
     clearTimeout(timer.current);
@@ -81,8 +87,25 @@ export default function Editor({ id, me }) {
   }
 
   const editor = useEditor({
-    extensions: [StarterKit],
+    extensions: [StarterKit, Image],
     editable: false,
+    editorProps: {
+      // Pasted or dropped image files are uploaded; everything else is left to TipTap.
+      handlePaste: (view, e) => {
+        const files = imageFiles(e.clipboardData?.files);
+        if (!files.length || !view.editable) return false;
+        uploadImagesRef.current(files);
+        return true;
+      },
+      handleDrop: (view, e) => {
+        const files = imageFiles(e.dataTransfer?.files);
+        if (!files.length || !view.editable) return false;
+        const pos = view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos;
+        if (pos != null) view.dispatch(view.state.tr.setSelection(Selection.near(view.state.doc.resolve(pos))));
+        uploadImagesRef.current(files);
+        return true;
+      },
+    },
     onUpdate: ({ editor }) => schedule({ content_html: editor.getHTML() }),
   });
   const ui = useEditorState({
@@ -179,6 +202,40 @@ export default function Editor({ id, me }) {
       setStatus(`Couldn’t delete: ${e.message}`);
     }
   }
+  async function insertImages(files) {
+    setInserting('Uploading image…');
+    try {
+      for (const file of files) {
+        const form = new FormData();
+        form.append('file', file);
+        const { url } = await api(`/documents/${id}/images`, { method: 'POST', body: form });
+        editor.chain().focus().setImage({ src: url, alt: file.name.replace(/\.[^.]+$/, '') })
+          .createParagraphNear().run(); // else the image stays selected and the next keystroke replaces it
+      }
+    } catch (e) {
+      setStatus(`Couldn’t add image: ${e.message}`);
+    } finally {
+      setInserting('');
+    }
+  }
+  uploadImagesRef.current = insertImages;
+
+  async function insertFile(file) {
+    const form = new FormData();
+    form.append('file', file);
+    setInserting('Importing…');
+    try {
+      const { html } = await api(`/documents/${id}/import`, { method: 'POST', body: form });
+      editor.chain().focus().insertContent(html).run();
+    } catch (e) {
+      setStatus(`Couldn’t import: ${e.message}`);
+    } finally {
+      setInserting('');
+    }
+  }
+  // Reset the input so choosing the same file twice still fires onChange.
+  const pick = (handler) => (e) => { const files = [...e.target.files]; e.target.value = ''; if (files.length) handler(files); };
+
   const startComment = () => {
     const { from, to } = editor.state.selection;
     setQuoteRequest({ text: editor.state.doc.textBetween(from, to, ' ').slice(0, 500) });
@@ -254,6 +311,16 @@ export default function Editor({ id, me }) {
                   {t.label}
                 </button>
               ))}
+              <span className="sep" />
+              <label className="button" title="Insert image or GIF (or paste / drop one into the page)" aria-busy={!!inserting}>
+                <I.Image /><span className="visually-hidden">Insert image</span>
+                <input type="file" className="visually-hidden" accept={IMAGE_TYPES} multiple disabled={!!inserting} onChange={pick(insertImages)} />
+              </label>
+              <label className="button" title="Insert a .txt, .md or .docx file at the cursor" aria-busy={!!inserting}>
+                <I.FileIn /><span className="visually-hidden">Insert file</span>
+                <input type="file" className="visually-hidden" accept=".txt,.md,.docx" disabled={!!inserting} onChange={pick(([f]) => insertFile(f))} />
+              </label>
+              {inserting && <span className="muted" role="status">{inserting}</span>}
             </>
           )}
           <span className="spacer" />
